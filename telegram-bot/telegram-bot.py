@@ -4,7 +4,7 @@ from bs4 import BeautifulSoup
 import requests
 
 # Токен от чат бота (Скрою для конфиденциальности)
-telegram_bot_token = "your_token"
+telegram_bot_token = "your token"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -13,7 +13,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     button = [
         [
             InlineKeyboardButton('Поиск по вакансии', callback_data='search_job'),
-            InlineKeyboardButton('Поиск по ризюме', callback_data='search_resume')
+            InlineKeyboardButton('Поиск по резюме', callback_data='search_resume')
         ]
     ]
 

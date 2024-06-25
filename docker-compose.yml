@@ -1,0 +1,19 @@
+services:
+  db:
+    image: postgres
+    restart: always
+    environment:
+      POSTGRES_PASSWORD: '12345'
+      POSTGRES_USER: 'danil'
+      POSTGRES_DB: 'practice'
+
+  adminer:
+    image: adminer
+    restart: always
+    ports:
+      - 8080:8080
+
+  telegram_bot:
+    build: ./telegram-bot
+    ports:
+      - 8081:8008
