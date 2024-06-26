@@ -6,6 +6,10 @@ services:
       POSTGRES_PASSWORD: '12345'
       POSTGRES_USER: 'danil'
       POSTGRES_DB: 'practice'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
 
   adminer:
     image: adminer
@@ -15,5 +19,15 @@ services:
 
   telegram_bot:
     build: ./telegram-bot
+    depends_on:
+      - postgres
+    environment:
+      DATABASE_URL: postgres://danil:12345@postgres:5432/practice
+    volumes:
+      - .:/telegram_bot
+    command: ["sh", "-c", "python init_db.py && python telegram_bot.py"]
     ports:
-      - 8081:8008
+      - "8000:8000"
+
+volumes:
+  postgres_data:

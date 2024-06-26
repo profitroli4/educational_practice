@@ -9,5 +9,5 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD [ "python", "telegram-bot.py" ]
+CMD ["python", "init_db.py"] && [ "python", "telegram-bot.py" ]
 
