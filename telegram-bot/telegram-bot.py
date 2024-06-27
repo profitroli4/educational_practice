@@ -3,6 +3,9 @@ from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandle
 import psycopg2
 import logging
 import subprocess
+import requests
+import json
+from datetime import datetime
 
 # Токен от чат бота (Скрою для конфиденциальности)
 telegram_bot_token = "your token"
@@ -55,27 +58,26 @@ def fetch_job_listings(job_title, page=0, per_page=10):
         return [], 0
 
 # Функция для сохранения в бд
-
 def save_vacancies_to_db(vacancies):
     conn = psycopg2.connect(
-        dbname = db_name,
-        user = db_user,
-        password = db_password,
-        host = db_host,
-        port = db_port
+        dbname=db_name,
+        user=db_user,
+        password=db_password,
+        host=db_host,
+        port=db_port
     )
 
-    cursor = conn.cursor
+    cursor = conn.cursor()
 
     for vacancy in vacancies:
-        hh_id = vacancy['id']
-        title = vacancy['name']
-        link = vacancy['alternate_url']
-        employer = vacancy.get('employer', {}).get('name')
+        hh_id = vacancy['hh_id']
+        title = vacancy['title']
+        link = vacancy['link']
+        employer = vacancy.get('employer', None)
         salary = json.dumps(vacancy['salary'])
-        date_posted = datetime.strptime(vacancy['published_at'], '%Y-%m-%dT%H:%M:%S%z')
-        description = vacancy['snippet']['responsibility']
-        requirements = vacancy['snippet']['requirement']
+        date_posted = datetime.strptime(vacancy['date_posted'], '%Y-%m-%dT%H:%M:%S%z')
+        description = vacancy.get('description', '')
+        requirements = vacancy.get('requirements', '')
 
         cursor.execute("""
         INSERT INTO vacancies (hh_id, title, link, employer, salary, date_posted, description, requirements)
@@ -94,11 +96,15 @@ def save_vacancies_to_db(vacancies):
     cursor.close()
     conn.close()        
 
+
 # Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text(
-        "Привет! Я бот для поиска вакансий. Нажмите /search для поиска вакансий."
-    )
+    if update.message:
+        await update.message.reply_text(
+            "Привет! Я бот для поиска вакансий. Нажмите /search для поиска вакансий."
+        )
+    else:
+        logger.warning("Update object does not contain a message.")
 
 # Обработчик команды /search
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -109,49 +115,47 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     job_title = update.message.text
     await update.message.reply_text(f"Ищем вакансии для {job_title}...")
 
-    # Запускаем парсер
-    result = parse_vacancies(job_title)
+    # Запускаем парсер для первой страницы
+    vacancies, _ = fetch_job_listings(job_title, page=0)
 
     # Проверяем, успешно ли был выполнен парсинг
-    if result:
+    if vacancies:
+        # Сохраняем вакансии в БД
+        save_vacancies_to_db(vacancies)
         await update.message.reply_text("Вакансии найдены и сохранены в базе данных.")
-        await show_vacancies(update, context, 1)
+        await show_vacancies(update, context, 1, job_title)
     else:
         await update.message.reply_text("Не удалось найти вакансии.")
 
 # Функция для отображения вакансий
-async def show_vacancies(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
-    conn = psycopg2.connect(
-        dbname=db_name,
-        user=db_user,
-        password=db_password,
-        host=db_host,
-        port=db_port
-    )
-    cursor = conn.cursor()
-    offset = (page - 1) * 10
-
-    cursor.execute("SELECT hh_id, title FROM vacancies ORDER BY date_posted DESC LIMIT 10 OFFSET %s", (offset,))
-    rows = cursor.fetchall()
-
-    conn.close()
-
-    if rows:
+async def show_vacancies(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int, job_title: str) -> None:
+    vacancies, total_pages = fetch_job_listings(job_title, page=page-1)
+    if vacancies:
+        save_vacancies_to_db(vacancies)
+        
         message = "Вакансии:\n"
         buttons = []
 
-        for idx, (hh_id, title) in enumerate(rows, start=1):
-            message += f"{idx}. {title}\n"
-            buttons.append([InlineKeyboardButton(text=str(idx), callback_data=f"detail_{hh_id}")])
+        for idx, vacancy in enumerate(vacancies, start=1):
+            message += f"{idx}. {vacancy['title']}\n"
+            buttons.append([InlineKeyboardButton(text=str(idx), callback_data=f"detail_{vacancy['hh_id']}")])
 
-        buttons.append([InlineKeyboardButton(text="Следующая страница", callback_data=f"page_{page+1}")])
+        if page < total_pages:
+            buttons.append([InlineKeyboardButton(text="Следующая страница", callback_data=f"page_{page+1}_{job_title}")])
         if page > 1:
-            buttons.append([InlineKeyboardButton(text="Предыдущая страница", callback_data=f"page_{page-1}")])
+            buttons.append([InlineKeyboardButton(text="Предыдущая страница", callback_data=f"page_{page-1}_{job_title}")])
 
         reply_markup = InlineKeyboardMarkup(buttons)
-        await update.message.reply_text(message, reply_markup=reply_markup)
+        if update.message:
+            await update.message.reply_text(message, reply_markup=reply_markup)
+        else:
+            await context.bot.send_message(update.effective_chat.id, message, reply_markup=reply_markup)
     else:
-        await update.message.reply_text("Больше вакансий нет.")
+        if update.message:
+            await update.message.reply_text("Больше вакансий нет.")
+        else:
+            await context.bot.send_message(update.effective_chat.id, "Больше вакансий нет.")
+
 
 # Обработчик для inline-кнопок
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -160,8 +164,8 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     data = query.data
 
     if data.startswith("page_"):
-        page = int(data.split("_")[1])
-        await show_vacancies(update, context, page)
+        page, job_title = data.split("_")[1], "_".join(data.split("_")[2:])
+        await show_vacancies(update, context, int(page), job_title)
     elif data.startswith("detail_"):
         hh_id = data.split("_")[1]
         await show_vacancy_detail(update, context, hh_id)
@@ -192,26 +196,33 @@ async def show_vacancy_detail(update: Update, context: ContextTypes.DEFAULT_TYPE
         message += f"*Требования:*\n{requirements}\n\n"
 
         buttons = [[InlineKeyboardButton(text="Ссылка на вакансию", url=link)]]
-        buttons.append([InlineKeyboardButton(text="Назад", callback_data="back")])
+        buttons.append([InlineKeyboardButton(text="Назад", callback_data=f"back")])
         reply_markup = InlineKeyboardMarkup(buttons)
 
-        await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+        if update.message:
+            await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
+        else:
+            await context.bot.send_message(update.effective_chat.id, message, parse_mode='Markdown', reply_markup=reply_markup)
     else:
-        await update.message.reply_text("Вакансия не найдена.")
+        if update.message:
+            await update.message.reply_text("Вакансия не найдена.")
+        else:
+            await context.bot.send_message(update.effective_chat.id, "Вакансия не найдена.")
 
-def parse_vacancies(job_title):
+
+def parse_vacancies(job_title, page=0):
     try:
         # Получаем список вакансий
-        vacancies = fetch_job_listings(job_title)
+        vacancies, _ = fetch_job_listings(job_title, page)
 
         # Сохраняем вакансии в БД
         save_vacancies_to_db(vacancies)
 
         print(f"Fetched and saved {len(vacancies)} vacancies.")
-        return True
+        return vacancies
     except Exception as e:
         print(f"Error occurred: {str(e)}")
-        return False
+        return []
 
 def main() -> None:
     application = ApplicationBuilder().token(telegram_bot_token).build()
