@@ -1,13 +1,11 @@
 FROM python:3
 
-WORKDIR /telegram_bot
-
-EXPOSE 8008
+WORKDIR /init_db
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY . .
 
-CMD [ "python", "telegram-bot.py" ]
+CMD [ "python", "init_db.py" ]
 

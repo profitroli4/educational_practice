@@ -6,7 +6,7 @@ def create_tables():
         dbname='practice',
         user='danil',
         password='12345',
-        host='localhost',
+        host='postgres',
         port='5432'
     )
     cursor = conn.cursor()
@@ -28,7 +28,6 @@ def create_tables():
 
     
     cursor.execute(create_vacancies_table_query)
-    cursor.execute(create_resumes_table_query)
     conn.commit()
 
     cursor.close()
