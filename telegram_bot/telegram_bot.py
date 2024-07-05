@@ -1,5 +1,5 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, Updater, CallbackContext, Application
 import psycopg2
 import logging
 import subprocess
@@ -15,7 +15,7 @@ telegram_bot_token = "your token"
 db_name = 'practice'
 db_user = 'danil'
 db_password = '12345'
-db_host = 'localhost'
+db_host = 'postgres'
 db_port = '5432'
 
 # Логирование
