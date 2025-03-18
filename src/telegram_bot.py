@@ -1,158 +1,23 @@
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, filters, ContextTypes, Updater, CallbackContext, Application
-import psycopg2
+from db import get_db_connection, save_vacancies_to_db, get_vacancies_count, get_vacancies_from_db
+from parser import fetch_job_listings
+from dotenv import load_dotenv
+import os
 import logging
-import subprocess
-import requests
-import json
-from datetime import datetime
-import re
 
-# Токен от чат бота (Скрою для конфиденциальности)
-telegram_bot_token = "your token"
+load_dotenv()
 
-# Настройка БД
-db_name = 'practice'
-db_user = 'danil'
-db_password = '12345'
-db_host = 'postgres'
-db_port = '5432'
+telegram_bot_token = os.getenv('TELEGRAM_BOT_TOKEN')
 
-# Логирование
 logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     level=logging.INFO
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)   
 
-# Функция для сохранения в бд
-def save_vacancies_to_db(vacancies):
-    conn = psycopg2.connect(
-        dbname=db_name,
-        user=db_user,
-        password=db_password,
-        host=db_host,
-        port=db_port
-    )
-
-    cursor = conn.cursor()
-
-    for vacancy in vacancies:
-        hh_id = vacancy['hh_id']
-        title = vacancy['title']
-        link = vacancy['link']
-        employer = vacancy.get('employer', None)
-        salary = json.dumps(vacancy['salary'])
-        date_posted = datetime.strptime(vacancy['date_posted'], '%Y-%m-%dT%H:%M:%S%z')
-        description = vacancy.get('description', '')
-        requirements = vacancy.get('requirements', '')
-
-        cursor.execute("""
-        INSERT INTO vacancies (hh_id, title, link, employer, salary, date_posted, description, requirements)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
-        ON CONFLICT (hh_id) DO UPDATE
-        SET title = EXCLUDED.title,
-            link = EXCLUDED.link,
-            employer = EXCLUDED.employer,
-            salary = EXCLUDED.salary,
-            date_posted = EXCLUDED.date_posted,
-            description = EXCLUDED.description,
-            requirements = EXCLUDED.requirements
-        """, (hh_id, title, link, employer, salary, date_posted, description, requirements))
-
-    conn.commit()
-    cursor.close()
-    conn.close()        
-
-def remove_html_tags(text):
-    if text is None:
-        return ''
-    clean = re.compile('<.*?>')
-    return re.sub(clean, '', text)
-
-# Парсер для API hh.ru
-def fetch_job_listings(job_title, page=0, per_page=10):
-    url = "https://api.hh.ru/vacancies"
-    params = {
-        'text': job_title,
-        'page': page,
-        'per_page': per_page
-    }
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.3'
-    }
-
-    response = requests.get(url, headers=headers, params=params)
-    if response.status_code == 200:
-        data = response.json()
-        vacancies = []
-        for item in data['items']:
-            # Убираем декорации текста
-            description = remove_html_tags(item.get('snippet', {}).get('responsibility', ''))
-            requirements = remove_html_tags(item.get('snippet', {}).get('requirement', ''))
-
-            salary_info = item.get('salary')
-
-            vacancies.append({
-                'hh_id': item.get('id'),
-                'title': item.get('name'),
-                'link': item.get('alternate_url'),
-                'employer': item.get('employer', {}).get('name'),
-                'salary': salary_info if salary_info else {},
-                'date_posted': item.get('published_at'),
-                'description': description,
-                'requirements': requirements
-            })
-
-        total_pages = data.get('pages', 1)
-        return vacancies, total_pages
-    else:
-        print(f"Failed to fetch data: {response.status_code}")
-        return [], 0
-
-# Функция для проверки количества вакансий в базе данных
-def get_vacancies_count():
-    conn = psycopg2.connect(
-        dbname=db_name,
-        user=db_user,
-        password=db_password,
-        host=db_host,
-        port=db_port
-    )
-    cursor = conn.cursor()
-    cursor.execute('SELECT COUNT(*) FROM vacancies')
-    count = cursor.fetchone()[0]
-    conn.close()
-    return count
-
-# Функция для получения вакансий из базы данных с фильтрацией и сортировкой
-def get_vacancies_from_db(sort_by=None, sort_order=None, filter_by=None, filter_value=None):
-    conn = psycopg2.connect(
-        dbname=db_name,
-        user=db_user,
-        password=db_password,
-        host=db_host,
-        port=db_port
-    )
-    cursor = conn.cursor()
-
-    query = "SELECT hh_id, title FROM vacancies"
-    params = []
-
-    if filter_by and filter_value:
-        query += f" WHERE {filter_by} ILIKE %s"
-        params.append(f"%{filter_value}%")
-
-    if sort_by:
-        query += f" ORDER BY {sort_by} {sort_order}"
-
-    cursor.execute(query, params)
-    vacancies = cursor.fetchall()
-    conn.close()
-    return vacancies
-
-# Функция для разбиения списка вакансий на страницы.
 def paginate_vacancies(vacancies, page=1, per_page=10):
+    """Функция для разбиения списка вакансий на страницы."""
     if not isinstance(page, int):
         raise TypeError(f"Expected 'page' to be int, got {type(page).__name__}")
     
@@ -160,8 +25,8 @@ def paginate_vacancies(vacancies, page=1, per_page=10):
     end = start + per_page
     return vacancies[start:end]
 
-# Обработчик команды /start
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /start"""
     if update.message:
         await update.message.reply_text(
             "Привет! Я бот для поиска вакансий на основе API hh.ru. Чтобы найти вакансии напиши или нажми /search, или же я могу работать с бд при помощи /job_database"
@@ -169,13 +34,13 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         logger.warning("Update object does not contain a message.")
 
-# Обработчик команды /search
 async def search(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /search"""
     context.user_data['first_search'] = True
     await update.message.reply_text("Введите название профессии для поиска:")
 
-# Обработчик текстовых сообщений
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик текстовых сообщений"""
 
     if context.user_data.get('expecting_job_title'):
         await handle_job_title(update, context)
@@ -214,10 +79,8 @@ async def handle_filter_message(update: Update, context: ContextTypes.DEFAULT_TY
     await show_vacancies(update, context, 1, job_title, action_type="showFILTER", sort_type=None, sort_by=None, sort_order=None, 
                          filter_by=filter_by, filter_value=filter_value)
 
-    
-
-# Обработчик команды /job_database
 async def job_database(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик команды /job_database"""
     count = get_vacancies_count()
 
     if count < 100:
@@ -229,8 +92,8 @@ async def job_database(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await show_vacancies(update, context, 1, job_title=None, action_type="show", sort_type=None, sort_by=None, sort_order=None,
         filter_by=None, filter_value=None)
 
-# Обработчик для получения названия профессии от пользователя
 async def handle_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик для получения названия профессии от пользователя"""
     if context.user_data.get('expecting_job_title'):
         job_title = update.message.text
         context.user_data['job_title'] = job_title
@@ -241,8 +104,8 @@ async def handle_job_title(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await update.message.reply_text("Введите количество страниц для загрузки (от 5 до 20 страниц, в странице по 10 вакансий):")
         context.user_data['expecting_pages_count'] = True
 
-# Обработчик для получения количества страниц от пользователя
 async def handle_pages_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик для получения количества страниц от пользователя"""
     if context.user_data.get('expecting_pages_count'):
         try:
             pages_count = int(update.message.text)
@@ -266,9 +129,9 @@ async def handle_pages_count(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except ValueError:
             await update.message.reply_text("Введите число.")
 
-# Функция для отображения вакансий
 async def show_vacancies(update: Update, context: ContextTypes.DEFAULT_TYPE, page: int, job_title: str, action_type,
  sort_type: str, sort_by: str = "title", sort_order: str = "asc", filter_by: str = "", filter_value: str = "") -> None:
+    """Функция для отображения вакансий"""
     action_type = action_type
 
     if action_type in ['show_vacancy', 'next', 'prev', 'back']:
@@ -394,8 +257,8 @@ async def show_vacancies(update: Update, context: ContextTypes.DEFAULT_TYPE, pag
             else:
                 await update.message.reply_text(message, parse_mode='Markdown', reply_markup=reply_markup)
 
-# Обработчик для inline-кнопок
 async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Обработчик для inline-кнопок"""
     query = update.callback_query
     await query.answer()  # Ответ на callback, чтобы не появлялось предупреждение
 
@@ -540,17 +403,11 @@ async def button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         print(f"Error: {e}")
         await query.edit_message_text(f"Произошла ошибка: {str(e)}. Пожалуйста, попробуйте еще раз.")  
 
-# Функция для отображения подробной информации о вакансии
 async def show_vacancy_detail(update: Update, context: ContextTypes.DEFAULT_TYPE, hh_id: str, page: int, job_title: str, action_type: str,
  sort_type: str, sort_by: str, sort_order: str, filter_by: str, filter_value: str) -> None:
+    """Функция для отображения подробной информации о вакансии"""
     query = update.callback_query
-    conn = psycopg2.connect(
-        dbname=db_name,
-        user=db_user,
-        password=db_password,
-        host=db_host,
-        port=db_port
-    )
+    conn = get_db_connection()
     cursor = conn.cursor()
 
     cursor.execute("SELECT title, link, employer, salary, date_posted, description, requirements FROM vacancies WHERE hh_id = %s", (hh_id,))

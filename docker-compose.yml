@@ -23,7 +23,9 @@ services:
       - 8081:8080
 
   init_bd:
-    build: ./init_db
+    build:
+      context: ./init_db
+      dockerfile: Dockerfile
     environment:
       DB_NAME: practice
       DB_USER: danil
@@ -35,7 +37,9 @@ services:
         condition: service_healthy
 
   telegram_bot:
-    build: ./telegram_bot
+    build: 
+      context: ./src
+      dockerfile: Dockerfile
     environment:
       DB_NAME: practice
       DB_USER: danil
